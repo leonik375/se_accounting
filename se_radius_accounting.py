@@ -55,8 +55,9 @@ _MINIMAL_DICT = """\
 ATTRIBUTE User-Name              1  string
 ATTRIBUTE NAS-IP-Address         4  ipaddr
 ATTRIBUTE Framed-IP-Address      8  ipaddr
+ATTRIBUTE Called-Station-Id     30  string
+ATTRIBUTE Calling-Station-Id    31  string
 ATTRIBUTE NAS-Identifier        32  string
-ATTRIBUTE Calling-Station-Id    32  string
 ATTRIBUTE Acct-Status-Type      40  integer
 ATTRIBUTE Acct-Delay-Time       41  integer
 ATTRIBUTE Acct-Input-Octets     42  integer
@@ -285,7 +286,9 @@ def send_accounting(radius: Client, status_type: str, session: dict,
         req.AddAttribute("Acct-Session-Id", f"{session['session_name']}@{session['start_time']}")
         req.AddAttribute("User-Name", session["username"])
         req.AddAttribute("NAS-IP-Address", NAS_IP)
-        req.AddAttribute("Calling-Station-Id", st_id)
+        req.AddAttribute("Called-Station-Id", st_id)
+        if session.get("client_product"):
+            req.AddAttribute("Calling-Station-Id", session["client_product"])
         req.AddAttribute("Framed-IP-Address", session["client_ip"])
         req.AddAttribute("Acct-Input-Octets", recv_bytes & 0xFFFFFFFF)
         req.AddAttribute("Acct-Output-Octets", send_bytes & 0xFFFFFFFF)
@@ -366,9 +369,10 @@ def poll(conn: sqlite3.Connection, radius: Client):
                 log.warning("Could not get detail for session %s on hub %s, skipping", name, hub)
                 continue
 
-            recv_bytes = detail.get("TotalRecvSize_u64", 0)
-            send_bytes = detail.get("TotalSendSize_u64", 0)
-            duration   = session_duration(start_time)
+            recv_bytes     = detail.get("TotalRecvSize_u64", 0)
+            send_bytes     = detail.get("TotalSendSize_u64", 0)
+            client_product = detail.get("ClientProductName_str", "")
+            duration       = session_duration(start_time)
 
             state = db_get_session(conn, key)
 
@@ -378,6 +382,7 @@ def poll(conn: sqlite3.Connection, radius: Client):
                 "client_ip": client_ip,
                 "start_time": start_time,
                 "hub": hub,
+                "client_product": client_product,
             }
 
             if not state:
