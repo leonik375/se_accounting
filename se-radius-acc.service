@@ -1,0 +1,19 @@
+[Unit]
+Description=SoftEther VPN to FreeRADIUS Accounting Daemon
+After=network.target freeradius.service softether-vpnserver.service
+Wants=freeradius.service softether-vpnserver.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/se-radius/se_radius_accounting.py
+Restart=on-failure
+RestartSec=10
+User=root
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=se-radius
+
+[Install]
+WantedBy=multi-user.target
