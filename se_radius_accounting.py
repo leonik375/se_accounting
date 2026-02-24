@@ -38,10 +38,12 @@ RADIUS_PORT     = 1813
 RADIUS_SECRET   = b"radius_secret"
 NAS_IP          = "127.0.0.1"   # IP of this VPN server as seen by RADIUS
 
-POLL_INTERVAL   = 300       # seconds between polls (5 minutes)
+POLL_INTERVAL   = 60       # seconds between polls
 STATE_DB        = "/var/lib/se-radius/state.db"
 DRY_RUN         = False     # overridden by --dry-run flag
 DEBUG_HTTP      = False     # overridden by --debug-http flag
+
+STOP_ON_SHUTDOWN = False
 
 LOG_LEVEL       = logging.INFO
 LOG_FORMAT      = "%(asctime)s [%(levelname)s] %(message)s"
@@ -290,12 +292,12 @@ def send_accounting(radius: Client, status_type: str, session: dict,
         if session.get("client_product"):
             req.AddAttribute("Calling-Station-Id", session["client_product"])
         req.AddAttribute("Framed-IP-Address", session["client_ip"])
-        req.AddAttribute("Acct-Input-Octets", recv_bytes & 0xFFFFFFFF)
-        req.AddAttribute("Acct-Output-Octets", send_bytes & 0xFFFFFFFF)
+        req.AddAttribute("Acct-Input-Octets", send_bytes & 0xFFFFFFFF)
+        req.AddAttribute("Acct-Output-Octets", recv_bytes & 0xFFFFFFFF)
         if recv_bytes >> 32:
-            req.AddAttribute("Acct-Input-Gigawords", recv_bytes >> 32)
+            req.AddAttribute("Acct-Input-Gigawords", send_bytes >> 32)
         if send_bytes >> 32:
-            req.AddAttribute("Acct-Output-Gigawords", send_bytes >> 32)
+            req.AddAttribute("Acct-Output-Gigawords", recv_bytes >> 32)
         req.AddAttribute("Acct-Session-Time", session_time)
         if terminate_cause:
             req.AddAttribute("Acct-Terminate-Cause", terminate_cause)
@@ -483,30 +485,31 @@ def main():
             time.sleep(min(1.0, remaining))
 
     # On shutdown — send Stop for all known sessions
-    log.info("Sending final Stop packets for all active sessions...")
-    for key in db_all_session_names(conn):
-        try:
-            state = db_get_session(conn, key)
-            if state and state["acct_started"]:
-                hub = state.get("hub", "")
-                original_name = key.split("/", 1)[1] if "/" in key else key
-                stop_info = {
-                    "session_name": original_name,
-                    "username": state["username"],
-                    "client_ip": state["client_ip"],
-                    "start_time": state["start_time"],
-                    "hub": hub,
-                }
-                duration = session_duration(state["start_time"])
-                send_accounting(
-                    radius, "Stop", stop_info,
-                    state["last_recv"], state["last_send"], duration,
-                    terminate_cause="Admin-Reset",
-                )
-        except Exception as e:
-            log.error("Error sending Stop for %s: %s", key, e)
-        finally:
-            db_delete_session(conn, key)
+    if STOP_ON_SHUTDOWN:
+        log.info("Sending final Stop packets for all active sessions...")
+        for key in db_all_session_names(conn):
+            try:
+                state = db_get_session(conn, key)
+                if state and state["acct_started"]:
+                    hub = state.get("hub", "")
+                    original_name = key.split("/", 1)[1] if "/" in key else key
+                    stop_info = {
+                        "session_name": original_name,
+                        "username": state["username"],
+                        "client_ip": state["client_ip"],
+                        "start_time": state["start_time"],
+                        "hub": hub,
+                    }
+                    duration = session_duration(state["start_time"])
+                    send_accounting(
+                        radius, "Stop", stop_info,
+                        state["last_recv"], state["last_send"], duration,
+                        terminate_cause="Admin-Reset",
+                    )
+            except Exception as e:
+                log.error("Error sending Stop for %s: %s", key, e)
+            finally:
+                db_delete_session(conn, key)
 
     conn.close()
     log.info("Daemon stopped.")
